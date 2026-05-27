@@ -6,22 +6,30 @@ from kafka import KafkaProducer
 
 
 DB_URL = "mysql+pymysql://root:root@localhost:3306/climate_dw"
-TOPIC_NAME = "climate_temperature_metrics"
+TOPIC_NAME = "climate_temperature_city_metrics"
 
 
-def get_metrics():
+def get_city_metrics():
     engine = create_engine(DB_URL)
 
     query = """
     SELECT
-        ROUND(AVG(temperatura_promedio), 2) AS avg_temperature,
-        ROUND(MAX(temperatura_maxima), 2) AS max_temperature,
-        SUM(evento_calor_extremo) AS extreme_heat_events
-    FROM fact_climate_daily;
+        c.city,
+        s.nombre_fuente AS source_name,
+        ROUND(AVG(f.temperatura_promedio), 2) AS avg_temperature,
+        ROUND(MAX(f.temperatura_maxima), 2) AS max_temperature,
+        SUM(f.evento_calor_extremo) AS extreme_heat_events
+    FROM fact_climate_daily f
+    JOIN dim_city c
+        ON f.city_id = c.city_id
+    JOIN dim_source s
+        ON f.source_id = s.source_id
+    GROUP BY c.city, s.nombre_fuente
+    ORDER BY extreme_heat_events DESC, max_temperature DESC;
     """
 
     df = pd.read_sql(query, engine)
-    return df.iloc[0].to_dict()
+    return df.to_dict(orient="records")
 
 
 def main():
@@ -32,16 +40,18 @@ def main():
 
     print("Producer iniciado...")
 
+    metrics_list = get_city_metrics()
+
     while True:
-        metrics = get_metrics()
-        metrics["timestamp"] = pd.Timestamp.now().isoformat()
+        for metrics in metrics_list:
+            metrics["timestamp"] = pd.Timestamp.now().isoformat()
 
-        producer.send(TOPIC_NAME, metrics)
-        producer.flush()
+            producer.send(TOPIC_NAME, metrics)
+            producer.flush()
 
-        print("Metrica enviada:", metrics)
+            print("Metrica enviada:", metrics)
 
-        time.sleep(5)
+            time.sleep(5)
 
 
 if __name__ == "__main__":
